@@ -3,6 +3,10 @@ export interface Message {
   conversation_id: number;
   role: 'user' | 'assistant';
   content: string;
+  input_type: 'text' | 'image' | 'mixed';
+  image_path?: string;
+  image_filename?: string;
+  image_size?: number;
   timestamp: string;
 }
 
@@ -14,6 +18,7 @@ export interface Conversation {
 export interface ChatMessage {
   role: string;
   content: string;
+  images?: string[];
 }
 
 export interface OllamaModel {
@@ -21,4 +26,10 @@ export interface OllamaModel {
   size: number;
   digest: string;
   modified_at: string;
+}
+
+export interface ImageFile {
+  file: File;
+  preview: string;
+  base64: string;
 }

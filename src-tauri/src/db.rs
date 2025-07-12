@@ -15,6 +15,10 @@ pub struct Message {
     pub conversation_id: i32,
     pub role: String,
     pub content: String,
+    pub input_type: String,
+    pub image_path: Option<String>,
+    pub image_filename: Option<String>,
+    pub image_size: Option<i32>,
     pub timestamp: String,
 }
 
@@ -56,11 +60,21 @@ impl Database {
                 conversation_id INTEGER,
                 role TEXT NOT NULL,
                 content TEXT NOT NULL,
+                input_type TEXT NOT NULL DEFAULT 'text',
+                image_path TEXT,
+                image_filename TEXT,
+                image_size INTEGER,
                 timestamp TEXT NOT NULL,
                 FOREIGN KEY (conversation_id) REFERENCES conversations(id)
             )",
             [],
         )?;
+
+        // Add new columns to existing messages table if they don't exist
+        let _ = self.conn.execute("ALTER TABLE messages ADD COLUMN input_type TEXT DEFAULT 'text'", []);
+        let _ = self.conn.execute("ALTER TABLE messages ADD COLUMN image_path TEXT", []);
+        let _ = self.conn.execute("ALTER TABLE messages ADD COLUMN image_filename TEXT", []);
+        let _ = self.conn.execute("ALTER TABLE messages ADD COLUMN image_size INTEGER", []);
 
         Ok(())
     }
@@ -75,8 +89,27 @@ impl Database {
 
     pub fn save_message(&self, conversation_id: i32, role: &str, content: &str, timestamp: &str) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO messages (conversation_id, role, content, timestamp) VALUES (?1, ?2, ?3, ?4)",
-            params![conversation_id, role, content, timestamp],
+            "INSERT INTO messages (conversation_id, role, content, input_type, timestamp) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![conversation_id, role, content, "text", timestamp],
+        )?;
+        Ok(())
+    }
+
+    pub fn save_message_with_image(
+        &self, 
+        conversation_id: i32, 
+        role: &str, 
+        content: &str, 
+        input_type: &str,
+        image_path: Option<&str>,
+        image_filename: Option<&str>,
+        image_size: Option<i32>,
+        timestamp: &str
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO messages (conversation_id, role, content, input_type, image_path, image_filename, image_size, timestamp) 
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![conversation_id, role, content, input_type, image_path, image_filename, image_size, timestamp],
         )?;
         Ok(())
     }
@@ -99,7 +132,7 @@ impl Database {
 
     pub fn get_messages(&self, conversation_id: i32) -> Result<Vec<Message>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, conversation_id, role, content, timestamp FROM messages 
+            "SELECT id, conversation_id, role, content, input_type, image_path, image_filename, image_size, timestamp FROM messages 
              WHERE conversation_id = ?1 ORDER BY timestamp ASC"
         )?;
         let message_iter = stmt.query_map(params![conversation_id], |row| {
@@ -108,7 +141,11 @@ impl Database {
                 conversation_id: row.get(1)?,
                 role: row.get(2)?,
                 content: row.get(3)?,
-                timestamp: row.get(4)?,
+                input_type: row.get::<_, Option<String>>(4)?.unwrap_or_else(|| "text".to_string()),
+                image_path: row.get(5)?,
+                image_filename: row.get(6)?,
+                image_size: row.get(7)?,
+                timestamp: row.get(8)?,
             })
         })?;
 
@@ -117,6 +154,26 @@ impl Database {
             messages.push(message?);
         }
         Ok(messages)
+    }
+
+    pub fn cleanup_orphaned_images(&self, images_dir: &std::path::Path) -> Result<()> {
+        // Get all image paths from database
+        let mut stmt = self.conn.prepare("SELECT DISTINCT image_path FROM messages WHERE image_path IS NOT NULL")?;
+        let db_paths: std::collections::HashSet<String> = stmt.query_map([], |row| {
+            Ok(row.get::<_, String>(0)?)
+        })?.collect::<Result<_, _>>()?;
+
+        // Clean up files not in database
+        if let Ok(entries) = std::fs::read_dir(images_dir) {
+            for entry in entries.flatten() {
+                if let Some(path_str) = entry.path().to_str() {
+                    if !db_paths.contains(path_str) {
+                        let _ = std::fs::remove_file(entry.path());
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 
